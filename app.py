@@ -24,6 +24,9 @@ enable_gc = st.sidebar.checkbox("定期的なメモリ解放", value=True) if op
 # User input
 search_keyword = st.text_input("職種名や施設名を入力してください（例：看護師 渋谷メディカルクリニック）")
 
+# 「開始」ボタンの追加
+start_button = st.button("開始", type="primary")
+
 # 取得件数の設定
 max_jobs = st.sidebar.slider("取得する求人数", min_value=1, max_value=200, value=10)
 
@@ -66,36 +69,124 @@ def extract_phone_number(text):
     if not text:
         return None
     
+    # デバッグ用に入力テキストを記録
+    debug_text = text[:100] + "..." if len(text) > 100 else text
+    
     # 電話番号のパターン（市外局番-市内局番-番号）
     patterns = [
+        # フリーダイヤル（0120）パターン
+        r'0120[\-\s]?\d{3}[\-\s]?\d{3}',  # 0120-123-456
+        r'0120[\-\s]?\d{2}[\-\s]?\d{4}',  # 0120-12-3456
+        r'0120\d{6}',  # 0120123456（ハイフンなし）
+        
         # 標準的な電話番号パターン
         r'0\d{1,4}[-(]?\d{1,4}[)-]?\d{3,4}',  # 03-1234-5678 or 03(1234)5678
+        
         # 特定キーワード後の電話番号
-        r'電話番号.{1,5}(0\d{1,4}[-(]?\d{1,4}[)-]?\d{3,4})',  # 「電話番号：03-1234-5678」のようなパターン
-        r'TEL.{1,5}(0\d{1,4}[-(]?\d{1,4}[)-]?\d{3,4})',  # 「TEL：03-1234-5678」のようなパターン
-        r'Tel.{1,5}(0\d{1,4}[-(]?\d{1,4}[)-]?\d{3,4})',  # 「Tel：03-1234-5678」のようなパターン
-        r'電話.{1,5}(0\d{1,4}[-(]?\d{1,4}[)-]?\d{3,4})',  # 「電話：03-1234-5678」のようなパターン
-        # 5-6桁の番号パターン
-        r'(\d{5,6})',  # 単独の5-6桁の番号
-        r'電話番号.{1,5}(\d{5,6})',  # 「電話番号：12345」のようなパターン
-        r'TEL.{1,5}(\d{5,6})',  # 「TEL：12345」のようなパターン
-        r'Tel.{1,5}(\d{5,6})',  # 「Tel：12345」のようなパターン
-        r'電話.{1,5}(\d{5,6})'   # 「電話：12345」のようなパターン
+        r'電話番号[^\d]*([\d\-\(\)]{7,15})',  # 「電話番号：03-1234-5678」のようなパターン
+        r'TEL[^\d]*([\d\-\(\)]{7,15})',  # 「TEL：03-1234-5678」のようなパターン
+        r'Tel[^\d]*([\d\-\(\)]{7,15})',  # 「Tel：03-1234-5678」のようなパターン
+        r'電話[^\d]*([\d\-\(\)]{7,15})',  # 「電話：03-1234-5678」のようなパターン
+        
+        # キーワード後のフリーダイヤル
+        r'電話番号[^\d]*(0120[\-\s]?\d{3}[\-\s]?\d{3})',
+        r'TEL[^\d]*(0120[\-\s]?\d{3}[\-\s]?\d{3})',
+        r'Tel[^\d]*(0120[\-\s]?\d{3}[\-\s]?\d{3})',
+        r'電話[^\d]*(0120[\-\s]?\d{3}[\-\s]?\d{3})',
+        
+        # 数字のみの塊を検出
+        r'\D(0\d{9,10})\D',  # 0で始まる10-11桁の数字
+        r'\D(\d{9,11})\D',   # 9-11桁の数字
+        r'\D(\d{7})\D',      # 7桁の数字（0120の後半部分の可能性）
+        
+        # 5-6桁の番号パターン（最後の手段）
+        r'\D(\d{5,6})\D',  # 単独の5-6桁の番号
     ]
     
-    # まず特定キーワード付きのパターンを優先的に検索
-    keyword_patterns = patterns[1:5] + patterns[6:10]
+    # まずフリーダイヤルを優先的に検索
+    free_dial_patterns = patterns[0:3] + patterns[8:12]
+    for pattern in free_dial_patterns:
+        matches = re.search(pattern, text, re.IGNORECASE)
+        if matches:
+            # グループがキャプチャされている場合はそのグループを、されていない場合は全体を返す
+            phone = matches.group(1) if len(matches.groups()) > 0 else matches.group(0)
+            # 0120の後に7桁の数字がある場合、適切にフォーマット
+            if re.match(r'0120\d{6}', phone):
+                # 0120-XXX-XXX の形式に整形
+                return f"{phone[:4]}-{phone[4:7]}-{phone[7:]}"
+            return phone
+    
+    # 次に特定キーワード付きのパターンを検索
+    keyword_patterns = patterns[4:8]
     for pattern in keyword_patterns:
         matches = re.search(pattern, text, re.IGNORECASE)
         if matches:
             # グループがキャプチャされている場合はそのグループを、されていない場合は全体を返す
-            return matches.group(1) if len(matches.groups()) > 0 else matches.group(0)
+            phone = matches.group(1) if len(matches.groups()) > 0 else matches.group(0)
+            # 数字のみに変換してから整形
+            digits = re.sub(r'[^\d]', '', phone)
+            if len(digits) >= 10:
+                if digits.startswith('0120') and len(digits) >= 10:
+                    return f"{digits[:4]}-{digits[4:7]}-{digits[7:10]}"
+                elif len(digits) == 10:
+                    return f"{digits[:2]}-{digits[2:6]}-{digits[6:10]}"
+                elif len(digits) == 11:
+                    return f"{digits[:3]}-{digits[3:7]}-{digits[7:11]}"
+            return phone
+    
+    # 数字のみのパターンを検索
+    digit_patterns = patterns[12:15]
+    for pattern in digit_patterns:
+        # テキストの周りにスペースを追加して、パターン開始と終了のマッチを容易にする
+        padded_text = f" {text} "
+        matches = re.search(pattern, padded_text, re.IGNORECASE)
+        if matches:
+            digits = matches.group(1)
+            if digits:
+                # 10-11桁の数字
+                if len(digits) >= 10:
+                    if digits.startswith('0120'):
+                        return f"{digits[:4]}-{digits[4:7]}-{digits[7:10]}"
+                    elif len(digits) == 10:
+                        return f"{digits[:2]}-{digits[2:6]}-{digits[6:10]}"
+                    elif len(digits) == 11:
+                        return f"{digits[:3]}-{digits[3:7]}-{digits[7:11]}"
+                    else:
+                        return digits
+                # 7桁の数字（0120の後半部分の可能性）
+                elif len(digits) == 7 and (digits.startswith('197') or digits.startswith('473')):
+                    return f"0120-{digits[:3]}-{digits[3:7]}"
+                # その他の数字
+                else:
+                    return digits
     
     # キーワードなしの通常パターンを検索
-    for pattern in [patterns[0], patterns[5]]:
+    for pattern in [patterns[3]] + patterns[15:]:
         matches = re.search(pattern, text, re.IGNORECASE)
         if matches:
-            return matches.group(0)
+            phone = matches.group(0)
+            # 数字だけの場合、長さをチェック
+            if re.match(r'^\d+$', phone):
+                # 7桁の場合は0120の可能性を考慮
+                if len(phone) == 7 and (phone.startswith('197') or phone.startswith('473')):
+                    return f"0120-{phone[:3]}-{phone[3:]}"
+                # その他の短い番号
+                elif len(phone) <= 6:
+                    return phone
+            return phone
+    
+    # 最後の手段：すべての数字を抽出して可能性を検討
+    digits_list = re.findall(r'\d+', text)
+    for digits in digits_list:
+        if len(digits) >= 10:  # 標準的な電話番号の長さ
+            if digits.startswith('0120'):
+                return f"{digits[:4]}-{digits[4:7]}-{digits[7:10] if len(digits) >= 10 else digits[7:]}"
+            elif len(digits) == 10:
+                return f"{digits[:2]}-{digits[2:6]}-{digits[6:10]}"
+            elif len(digits) == 11:
+                return f"{digits[:3]}-{digits[3:7]}-{digits[7:11]}"
+        elif len(digits) == 7 and (digits.startswith('197') or digits.startswith('473')):
+            return f"0120-{digits[:3]}-{digits[3:7]}"
     
     return None
 
@@ -743,16 +834,103 @@ def get_job_details(detail_url):
         for element in phone_elements:
             # 前の要素が「代表電話番号」を含むh3であるかチェック
             prev_el = element.find_previous()
-            if prev_el and prev_el.name == 'h3' and '代表電話番号' in prev_el.text:
+            if prev_el and prev_el.name == 'h3' and ('代表電話番号' in prev_el.text or '電話番号' in prev_el.text or 'TEL' in prev_el.text.upper()):
                 # p要素の中身が空でないことを確認
                 content = element.text.strip()
-                if content and re.search(r'\d', content):  # 数字を含むことを確認
-                    phone_number = content
-                    if debug_mode and show_html:
-                        st.success(f"HTMLクラスから代表電話番号を検出: {phone_number}")
-                    break
-        
-        # Try to find phone number in specific elements first
+                if debug_mode and show_html:
+                    st.info(f"電話番号候補（HTMLクラス）: {content}")
+                if content:
+                    # 数字のみを抽出
+                    digits = re.sub(r'[^\d]', '', content)
+                    if digits:
+                        # 桁数に基づいて適切なフォーマットを適用
+                        if len(digits) >= 10:  # 標準的な電話番号の桁数
+                            if digits.startswith('0120') and len(digits) >= 10:
+                                # フリーダイヤル: 0120-XXX-XXX
+                                phone_number = f"{digits[:4]}-{digits[4:7]}-{digits[7:10]}"
+                            elif len(digits) == 10:
+                                # 固定電話: 03-XXXX-XXXX
+                                phone_number = f"{digits[:2]}-{digits[2:6]}-{digits[6:10]}"
+                            elif len(digits) == 11:
+                                # 携帯電話: 090-XXXX-XXXX
+                                phone_number = f"{digits[:3]}-{digits[3:7]}-{digits[7:11]}"
+                            else:
+                                # その他のケース
+                                phone_number = digits
+                        else:
+                            # 桁数が少ない場合、0120の可能性を考慮
+                            if len(digits) == 7 and (digits.startswith('197') or digits.startswith('473')):
+                                phone_number = f"0120-{digits[:3]}-{digits[3:7]}"
+                            else:
+                                phone_number = digits
+                        
+                        if debug_mode and show_html:
+                            st.success(f"HTMLクラスから代表電話番号を検出: {phone_number}")
+                        break
+
+        # もう一つのアプローチ: h3タグ「代表電話番号」の次にあるpタグを直接検索
+        if phone_number == "情報なし":
+            tel_headers = soup.find_all('h3', string=lambda s: s and ('代表電話番号' in s or '電話番号' in s or 'TEL' in s.upper()))
+            for header in tel_headers:
+                # 次の兄弟要素を取得
+                next_elem = header.find_next()
+                if next_elem and next_elem.name == 'p':
+                    content = next_elem.text.strip()
+                    if content:
+                        # 数字のみを抽出
+                        digits = re.sub(r'[^\d]', '', content)
+                        if digits:
+                            if len(digits) >= 10:
+                                if digits.startswith('0120') and len(digits) >= 10:
+                                    phone_number = f"{digits[:4]}-{digits[4:7]}-{digits[7:10]}"
+                                elif len(digits) == 10:
+                                    phone_number = f"{digits[:2]}-{digits[2:6]}-{digits[6:10]}"
+                                elif len(digits) == 11:
+                                    phone_number = f"{digits[:3]}-{digits[3:7]}-{digits[7:11]}"
+                                else:
+                                    phone_number = digits
+                            else:
+                                if len(digits) == 7 and (digits.startswith('197') or digits.startswith('473')):
+                                    phone_number = f"0120-{digits[:3]}-{digits[3:7]}"
+                                else:
+                                    phone_number = digits
+                            
+                            if debug_mode and show_html:
+                                st.success(f"h3タグの次のpタグから代表電話番号を検出: {phone_number}")
+                            break
+
+        # テーブル構造から電話番号を検索 - 「代表電話番号」というラベルを持つthの隣接tdを検索
+        if phone_number == "情報なし":
+            tel_th_elements = soup.find_all('th', string=lambda s: s and ('代表電話番号' in s or '電話番号' in s or 'TEL' in s.upper()))
+            for th in tel_th_elements:
+                # 隣接するtd要素を取得
+                td = th.find_next_sibling('td')
+                if td:
+                    content = td.text.strip()
+                    if content:
+                        # 数字のみを抽出
+                        digits = re.sub(r'[^\d]', '', content)
+                        if digits:
+                            if len(digits) >= 10:
+                                if digits.startswith('0120') and len(digits) >= 10:
+                                    phone_number = f"{digits[:4]}-{digits[4:7]}-{digits[7:10]}"
+                                elif len(digits) == 10:
+                                    phone_number = f"{digits[:2]}-{digits[2:6]}-{digits[6:10]}"
+                                elif len(digits) == 11:
+                                    phone_number = f"{digits[:3]}-{digits[3:7]}-{digits[7:11]}"
+                                else:
+                                    phone_number = digits
+                            else:
+                                if len(digits) == 7 and (digits.startswith('197') or digits.startswith('473')):
+                                    phone_number = f"0120-{digits[:3]}-{digits[3:7]}"
+                                else:
+                                    phone_number = digits
+                            
+                            if debug_mode and show_html:
+                                st.success(f"テーブル構造から代表電話番号を検出: {phone_number}")
+                            break
+
+        # 一般的なセレクタによる検索
         if phone_number == "情報なし":
             phone_selectors = [
                 'div.tel', 
@@ -781,7 +959,7 @@ def get_job_details(detail_url):
                         break
                 if phone_number != "情報なし":
                     break
-        
+
         # If not found, search in the entire page text
         if phone_number == "情報なし":
             # Look for phone number in the entire page
@@ -794,32 +972,65 @@ def get_job_details(detail_url):
         
         # Extract job description - try multiple selectors
         job_description = "情報なし"
-        description_selectors = [
-            'div.jobDtlText.jobIntro', 
-            'div.job-description', 
-            'div.description',
-            'div[class*="job"][class*="description"]',
-            'div[class*="description"]',
-            'div.jobDetail',
-            'div.jobContent',
-            'div.kyujin-detail',
-            'section.detail',
-            'div.detail-content',
-            'div.job-content'
-        ]
         
-        for selector in description_selectors:
-            job_description_elements = soup.select(selector)
-            if job_description_elements:
-                # Combine all matching elements
-                combined_text = "\n\n".join([elem.text.strip() for elem in job_description_elements])
-                if combined_text:
-                    job_description = combined_text
-                    if debug_mode and show_html:
-                        st.success(f"業務内容が見つかりました（セレクタ: {selector}）")
-                    break
+        # 1. 「職種/仕事内容」セクションから情報を抽出
+        job_sections = soup.find_all('h3', string=lambda s: s and ('職種/仕事内容' in s or '仕事内容' in s))
+        for section in job_sections:
+            # 親要素を取得
+            parent_th = section.find_parent('th')
+            if parent_th:
+                # 隣接するtd要素を取得
+                td = parent_th.find_next_sibling('td')
+                if td:
+                    content = td.text.strip()
+                    if content:
+                        job_description = content
+                        if debug_mode and show_html:
+                            st.success(f"「職種/仕事内容」セクションから業務内容を検出: {content[:100]}...")
+                        break
         
-        # Enhanced fallback mechanism for job description
+        # 2. styles_content__cGhMI クラスを持つ要素から抽出（特定のクラス名を使用）
+        if job_description == "情報なし":
+            job_content_elements = soup.select('td.styles_content__cGhMI.styles_commonContent__NDgRD.styles_recruitCol__rbAHs')
+            for element in job_content_elements:
+                # 前の要素（th）に「職種/仕事内容」が含まれているか確認
+                prev_th = element.find_previous('th')
+                if prev_th and prev_th.find('p') and ('職種/仕事内容' in prev_th.text or '仕事内容' in prev_th.text):
+                    content = element.text.strip()
+                    if content:
+                        job_description = content
+                        if debug_mode and show_html:
+                            st.success(f"styles_content__cGhMI クラスから業務内容を検出: {content[:100]}...")
+                        break
+        
+        # 3. もともとあった様々なセレクタを使った検索方法（フォールバック）
+        if job_description == "情報なし":
+            description_selectors = [
+                'div.jobDtlText.jobIntro', 
+                'div.job-description', 
+                'div.description',
+                'div[class*="job"][class*="description"]',
+                'div[class*="description"]',
+                'div.jobDetail',
+                'div.jobContent',
+                'div.kyujin-detail',
+                'section.detail',
+                'div.detail-content',
+                'div.job-content'
+            ]
+            
+            for selector in description_selectors:
+                job_description_elements = soup.select(selector)
+                if job_description_elements:
+                    # Combine all matching elements
+                    combined_text = "\n\n".join([elem.text.strip() for elem in job_description_elements])
+                    if combined_text:
+                        job_description = combined_text
+                        if debug_mode and show_html:
+                            st.success(f"業務内容が見つかりました（セレクタ: {selector}）")
+                        break
+        
+        # 4. Enhanced fallback mechanism for job description
         if job_description == "情報なし":
             # Try to find sections with job-related keywords
             keywords = ['仕事内容', '業務内容', '職務内容', 'お仕事', '職種']
@@ -936,9 +1147,30 @@ def display_job_table(job_list):
         location = re.sub(r'選考プロセス.*$', '', location)
         location = location.strip()
         
-        # 電話番号のクリーニング
+        # 電話番号のクリーニングと整形
         phone_number = job['phone_number'] if job['phone_number'] != "情報なし" else ""
-        phone_number = re.sub(r'[^\d\-\(\)]', '', phone_number).strip()
+        
+        # 電話番号の特殊処理
+        if phone_number:
+            # 数字だけの7桁の場合、0120の可能性を考慮
+            if re.match(r'^\d{7}$', phone_number) and (phone_number.startswith('197') or phone_number.startswith('473')):
+                phone_number = f"0120-{phone_number[:3]}-{phone_number[3:]}"
+            # 数字だけで0で始まらない場合、0を前置
+            elif re.match(r'^\d+$', phone_number) and not phone_number.startswith('0') and len(phone_number) > 5:
+                if len(phone_number) == 9:  # 市外局番が抜けている可能性
+                    phone_number = f"03-{phone_number[:4]}-{phone_number[4:]}"
+                else:
+                    phone_number = f"0{phone_number}"
+            
+            # 桁区切りがない場合は追加
+            if re.match(r'^0\d{9,10}$', phone_number):
+                if len(phone_number) == 10:  # 固定電話
+                    phone_number = f"{phone_number[:2]}-{phone_number[2:6]}-{phone_number[6:]}"
+                elif len(phone_number) == 11:  # 携帯電話
+                    phone_number = f"{phone_number[:3]}-{phone_number[3:7]}-{phone_number[7:]}"
+            
+            # 数字とハイフン以外は削除
+            phone_number = re.sub(r'[^\d\-]', '', phone_number)
         
         table_data.append({
             "施設名": facility_name,
@@ -1029,7 +1261,7 @@ if direct_url and debug_mode:
         elif job_details:
             # Display job details
             display_full_job_details(job_details)
-elif search_keyword:
+elif search_keyword and start_button:  # キーワードが入力されていて、かつ開始ボタンが押された場合
     with st.spinner('検索中...'):
         job_links, error, search_url = get_job_listings(search_keyword)
         
@@ -1130,6 +1362,6 @@ elif search_keyword:
             else:
                 st.warning("求人情報を取得できませんでした。")
 else:
-    st.info("上の検索ボックスに職種名や施設名を入力してください。")
+    st.info("上の検索ボックスに職種名や施設名を入力し、「開始」ボタンをクリックしてください。")
     if debug_mode:
         st.info("または、サイドバーから直接URLを入力してデバッグすることもできます。") 
