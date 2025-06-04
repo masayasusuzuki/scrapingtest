@@ -738,34 +738,49 @@ def get_job_details(detail_url):
         # Extract phone number
         phone_number = "情報なし"
         
-        # Try to find phone number in specific elements first
-        phone_selectors = [
-            'div.tel', 
-            'div.phone',
-            'span.tel',
-            'span.phone',
-            'p.tel',
-            'a[href^="tel:"]',
-            'div.contact',
-            'div.telNo',
-            'p:contains("TEL")',
-            'div:contains("TEL")',
-            'p:contains("電話")',
-            'div:contains("電話")'
-        ]
-        
-        for selector in phone_selectors:
-            phone_elements = soup.select(selector)
-            for element in phone_elements:
-                element_text = element.text.strip()
-                extracted_number = extract_phone_number(element_text)
-                if extracted_number:
-                    phone_number = extracted_number
+        # 0. HTMLクラスベースでの電話番号検出
+        phone_elements = soup.select('p.styles_content__HWIR6')
+        for element in phone_elements:
+            # 前の要素が「代表電話番号」を含むh3であるかチェック
+            prev_el = element.find_previous()
+            if prev_el and prev_el.name == 'h3' and '代表電話番号' in prev_el.text:
+                # p要素の中身が空でないことを確認
+                content = element.text.strip()
+                if content and re.search(r'\d', content):  # 数字を含むことを確認
+                    phone_number = content
                     if debug_mode and show_html:
-                        st.success(f"電話番号が見つかりました（セレクタ: {selector}）: {phone_number}")
+                        st.success(f"HTMLクラスから代表電話番号を検出: {phone_number}")
                     break
-            if phone_number != "情報なし":
-                break
+        
+        # Try to find phone number in specific elements first
+        if phone_number == "情報なし":
+            phone_selectors = [
+                'div.tel', 
+                'div.phone',
+                'span.tel',
+                'span.phone',
+                'p.tel',
+                'a[href^="tel:"]',
+                'div.contact',
+                'div.telNo',
+                'p:contains("TEL")',
+                'div:contains("TEL")',
+                'p:contains("電話")',
+                'div:contains("電話")'
+            ]
+            
+            for selector in phone_selectors:
+                phone_elements = soup.select(selector)
+                for element in phone_elements:
+                    element_text = element.text.strip()
+                    extracted_number = extract_phone_number(element_text)
+                    if extracted_number:
+                        phone_number = extracted_number
+                        if debug_mode and show_html:
+                            st.success(f"電話番号が見つかりました（セレクタ: {selector}）: {phone_number}")
+                        break
+                if phone_number != "情報なし":
+                    break
         
         # If not found, search in the entire page text
         if phone_number == "情報なし":
@@ -921,10 +936,15 @@ def display_job_table(job_list):
         location = re.sub(r'選考プロセス.*$', '', location)
         location = location.strip()
         
+        # 電話番号のクリーニング
+        phone_number = job['phone_number'] if job['phone_number'] != "情報なし" else ""
+        phone_number = re.sub(r'[^\d\-\(\)]', '', phone_number).strip()
+        
         table_data.append({
             "施設名": facility_name,
             "代表者": representative,
             "勤務地": location,
+            "代表電話番号": phone_number,
             "URL": job['source_url'],
             "仕事内容": job['short_description']
         })
@@ -940,6 +960,7 @@ def display_job_table(job_list):
             "施設名": st.column_config.TextColumn("施設名", width="medium"),
             "代表者": st.column_config.TextColumn("代表者", width="small"),
             "勤務地": st.column_config.TextColumn("勤務地", width="large"),
+            "代表電話番号": st.column_config.TextColumn("代表電話番号", width="small"),
             "URL": st.column_config.TextColumn("URL", width="medium"),
             "仕事内容": st.column_config.TextColumn("仕事内容", width="large")
         }
@@ -980,7 +1001,15 @@ def display_full_job_details(job):
             location = location.strip()
             
             st.markdown(f"**勤務地**: {location}")
+        
+        # 代表電話番号情報（情報なしの場合は表示しない）
+        if job['phone_number'] and job['phone_number'] != "情報なし":
+            # 電話番号のクリーニング
+            phone_number = job['phone_number']
+            phone_number = re.sub(r'[^\d\-\(\)]', '', phone_number).strip()
             
+            st.markdown(f"**代表電話番号**: {phone_number}")
+        
         st.markdown(f"**URL**: {job['source_url']}")
         
         st.markdown("**業務内容**:")
