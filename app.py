@@ -28,7 +28,7 @@ search_keyword = st.text_input("職種名や施設名を入力してください
 start_button = st.button("開始", type="primary")
 
 # 取得件数の設定
-max_jobs = st.sidebar.slider("取得する求人数", min_value=1, max_value=200, value=10)
+max_jobs = st.sidebar.slider("取得する求人数", min_value=1, max_value=300, value=10)
 
 # Common headers to mimic a browser
 def get_headers():
@@ -425,42 +425,102 @@ def find_all_job_links(soup, search_url):
 def get_job_listings(keyword):
     # Create search URL
     encoded_keyword = urllib.parse.quote(keyword)
-    search_url = f"https://toranet.jp/prefectures/tokyo/job_search/kw/{encoded_keyword}"
+    base_search_url = f"https://toranet.jp/prefectures/tokyo/job_search/kw/{encoded_keyword}"
     
     # If direct_listing is checked, use the search URL directly
     if direct_listing:
         st.info("一覧ページを直接詳細ページとして使用します")
-        return [search_url], None, search_url
+        return [base_search_url], None, base_search_url
     
-    response, error = make_request(search_url)
-    if error:
-        return None, error, search_url
+    # ページネーション対応のために変数を準備
+    all_job_links = []
+    current_page = 1
+    max_pages = 10  # 最大ページ数（安全のため）
     
-    # Display HTML for debugging
-    display_html_response(response, "検索結果ページ")
-    
-    try:
-        soup = BeautifulSoup(response.text, 'html.parser')
+    while len(all_job_links) < max_jobs and current_page <= max_pages:
+        # ページURLを構築（1ページ目は通常のURL、2ページ目以降はページ番号を追加）
+        if current_page == 1:
+            search_url = base_search_url
+        else:
+            search_url = f"{base_search_url}/page/{current_page}"
         
-        # Advanced link finding approach - get multiple links
-        job_links = find_all_job_links(soup, search_url)
-        
-        if not job_links:
-            # If we couldn't find any suitable links, check if the search page itself has job details
-            if any(tag.name in ['h1', 'h2'] and ('求人情報' in tag.text or '仕事内容' in tag.text) for tag in soup.find_all(['h1', 'h2'])):
-                if debug_mode:
-                    st.success("検索ページ自体が求人詳細ページのようです。直接使用します。")
-                return [search_url], None, search_url
-            
-            return None, "求人リンクが見つかりませんでした。サイト構造が変更された可能性があります。", search_url
-        
-        return job_links, None, search_url
-    except Exception as e:
-        st.error(f"解析エラー: {str(e)}")
-        import traceback
         if debug_mode:
-            st.code(traceback.format_exc(), language="python")
-        return None, f"パース中にエラーが発生しました: {str(e)}", search_url
+            st.info(f"ページ {current_page} の求人を取得中: {search_url}")
+        
+        response, error = make_request(search_url)
+        if error:
+            if current_page > 1:
+                # 2ページ目以降でエラーが出た場合は、ページネーションの終了とみなす
+                if debug_mode:
+                    st.warning(f"ページ {current_page} の取得に失敗しました。これ以上のページはないと判断します。")
+                break
+            else:
+                # 1ページ目からエラーの場合は本当のエラーとして処理
+                return None, error, search_url
+        
+        # Display HTML for debugging
+        display_html_response(response, f"検索結果ページ {current_page}")
+        
+        try:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Advanced link finding approach - get multiple links
+            page_job_links = find_all_job_links(soup, search_url)
+            
+            if not page_job_links:
+                if current_page == 1:
+                    # 1ページ目でリンクがない場合は、検索ページ自体が求人詳細かチェック
+                    if any(tag.name in ['h1', 'h2'] and ('求人情報' in tag.text or '仕事内容' in tag.text) for tag in soup.find_all(['h1', 'h2'])):
+                        if debug_mode:
+                            st.success("検索ページ自体が求人詳細ページのようです。直接使用します。")
+                        return [search_url], None, search_url
+                    
+                    return None, "求人リンクが見つかりませんでした。サイト構造が変更された可能性があります。", search_url
+                else:
+                    # 2ページ目以降でリンクがない場合は、ページネーションの終了とみなす
+                    if debug_mode:
+                        st.info(f"ページ {current_page} には求人リンクがありません。これ以上のページはないと判断します。")
+                    break
+            
+            # 新しく見つけたリンクを追加（重複を避けるためにセットを使用）
+            existing_links = set(all_job_links)
+            for link in page_job_links:
+                if link not in existing_links and len(all_job_links) < max_jobs:
+                    all_job_links.append(link)
+                    existing_links.add(link)
+            
+            if debug_mode:
+                st.success(f"ページ {current_page} から {len(page_job_links)} 件のリンクを取得しました。現在の合計: {len(all_job_links)} 件")
+            
+            # 次のページに進む
+            current_page += 1
+            
+            # 既に十分な数のリンクが得られた場合は終了
+            if len(all_job_links) >= max_jobs:
+                if debug_mode:
+                    st.info(f"設定された上限 {max_jobs} 件に達したため、ページネーションを終了します。")
+                break
+                
+            # ページ間の待機時間を設定して、サーバー負荷を軽減
+            if current_page <= max_pages:
+                time.sleep(random.uniform(1.0, 3.0))
+                
+        except Exception as e:
+            st.error(f"解析エラー: {str(e)}")
+            import traceback
+            if debug_mode:
+                st.code(traceback.format_exc(), language="python")
+            if current_page == 1:
+                return None, f"パース中にエラーが発生しました: {str(e)}", search_url
+            else:
+                # 2ページ目以降のエラーは、ここまでのリンクを使って続行
+                break
+    
+    if debug_mode:
+        st.success(f"合計 {len(all_job_links)} 件の求人リンクを取得しました（{current_page-1} ページ探索）")
+    
+    # 1ページ目から最大ページ数まで探索して見つかったリンクを返す
+    return all_job_links, None, base_search_url
 
 # Function to clean facility name
 def clean_facility_name(name):
@@ -1175,10 +1235,11 @@ def display_job_table(job_list):
         table_data.append({
             "施設名": facility_name,
             "代表者": representative,
-            "勤務地": location,
-            "代表電話番号": phone_number,
+            "所在地": location,
             "URL": job['source_url'],
-            "仕事内容": job['short_description']
+            "電話番号": phone_number,
+            "メールアドレス": "",  # プレースホルダー（将来的に実装）
+            "主な事業内容": job['short_description']
         })
     
     # Convert to DataFrame and display
@@ -1191,10 +1252,11 @@ def display_job_table(job_list):
         column_config={
             "施設名": st.column_config.TextColumn("施設名", width="medium"),
             "代表者": st.column_config.TextColumn("代表者", width="small"),
-            "勤務地": st.column_config.TextColumn("勤務地", width="large"),
-            "代表電話番号": st.column_config.TextColumn("代表電話番号", width="small"),
+            "所在地": st.column_config.TextColumn("所在地", width="large"),
             "URL": st.column_config.TextColumn("URL", width="medium"),
-            "仕事内容": st.column_config.TextColumn("仕事内容", width="large")
+            "電話番号": st.column_config.TextColumn("電話番号", width="small"),
+            "メールアドレス": st.column_config.TextColumn("メールアドレス", width="medium"),
+            "主な事業内容": st.column_config.TextColumn("主な事業内容", width="large")
         }
     )
 
@@ -1221,7 +1283,7 @@ def display_full_job_details(job):
             
             st.markdown(f"**代表者**: {representative}")
         
-        # 勤務地情報（空の場合は表示しない）
+        # 所在地情報（空の場合は表示しない）
         if job['location']:
             # クリーニング
             location = job['location']
@@ -1232,19 +1294,19 @@ def display_full_job_details(job):
             location = re.sub(r'選考プロセス.*$', '', location)
             location = location.strip()
             
-            st.markdown(f"**勤務地**: {location}")
+            st.markdown(f"**所在地**: {location}")
+            
+        st.markdown(f"**URL**: {job['source_url']}")
         
-        # 代表電話番号情報（情報なしの場合は表示しない）
+        # 電話番号情報（情報なしの場合は表示しない）
         if job['phone_number'] and job['phone_number'] != "情報なし":
             # 電話番号のクリーニング
             phone_number = job['phone_number']
             phone_number = re.sub(r'[^\d\-\(\)]', '', phone_number).strip()
             
-            st.markdown(f"**代表電話番号**: {phone_number}")
+            st.markdown(f"**電話番号**: {phone_number}")
         
-        st.markdown(f"**URL**: {job['source_url']}")
-        
-        st.markdown("**業務内容**:")
+        st.markdown("**主な事業内容**:")
         st.markdown(job['job_description'])
 
 # Test direct URL access
