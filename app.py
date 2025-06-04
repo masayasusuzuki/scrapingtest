@@ -1249,6 +1249,7 @@ def display_job_table(job_list):
     st.dataframe(
         df,
         use_container_width=True,
+        hide_index=True,  # インデックス（行番号）を非表示
         column_config={
             "施設名": st.column_config.TextColumn("施設名", width="medium"),
             "代表者": st.column_config.TextColumn("代表者", width="small"),
